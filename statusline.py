@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -14,16 +15,23 @@ from datetime import datetime
 
 KIMI_HOME = os.path.abspath(os.path.expanduser(os.environ.get("KIMI_CODE_HOME", "~/.kimi-code")))
 CONFIG_FILE = os.path.join(KIMI_HOME, "config.toml")
+SETTINGS_FILE = os.path.join(KIMI_HOME, "quota-statusline.json")
 CREDENTIALS_DIR = os.path.join(KIMI_HOME, "credentials")
 CACHE_FILE = os.path.join(KIMI_HOME, "quota-statusline-cache.json")
 LOCK_FILE = os.path.join(KIMI_HOME, "quota-statusline-refresh.lock")
 DEFAULT_BASE_URL = "https://api.kimi.com/coding/v1"
 ALLOWED_HOSTS = {"api.kimi.com", "api.kimi.ai"}
+DEFAULT_ITEMS = ("mode", "model", "plan", "5h", "7d", "month", "git", "cwd")
+ALLOWED_ITEMS = frozenset(DEFAULT_ITEMS)
 CACHE_TTL_SECONDS = 60
 STALE_AFTER_SECONDS = 600
 LOCK_TTL_SECONDS = 120
 REQUEST_TIMEOUT_SECONDS = 8
 MAX_RESPONSE_BYTES = 1_000_000
+ANSI_RESET = "\033[0m"
+ANSI_GREEN = "\033[32m"
+ANSI_ORANGE = "\033[38;5;208m"
+ANSI_RED = "\033[31m"
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -190,7 +198,7 @@ def fetch_official_quota():
             headers={
                 "Authorization": "Bearer " + token,
                 "Accept": "application/json",
-                "User-Agent": "kimi-quota-statusline-secure/1.0.0",
+                "User-Agent": "kimi-quota-statusline-secure/1.1.0",
             },
         )
         opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
@@ -322,43 +330,159 @@ def reset_hint(value):
         return ""
 
 
-def render(cache):
+def load_settings():
+    settings = {
+        "items": DEFAULT_ITEMS,
+        "colors": True,
+        "warning_below": 20.0,
+        "critical_below": 10.0,
+        "show_reset": True,
+    }
+    try:
+        raw = read_json(SETTINGS_FILE, max_bytes=65536)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return settings
+
+    items = raw.get("items")
+    if isinstance(items, list):
+        selected = []
+        for item in items:
+            if isinstance(item, str) and item in ALLOWED_ITEMS and item not in selected:
+                selected.append(item)
+        if selected:
+            settings["items"] = tuple(selected)
+    if isinstance(raw.get("colors"), bool):
+        settings["colors"] = raw["colors"]
+    if isinstance(raw.get("show_reset"), bool):
+        settings["show_reset"] = raw["show_reset"]
+    try:
+        warning = finite_number(raw.get("warning_below", settings["warning_below"]))
+        critical = finite_number(raw.get("critical_below", settings["critical_below"]))
+        if 0 <= critical <= warning <= 100:
+            settings["warning_below"] = warning
+            settings["critical_below"] = critical
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return settings
+
+
+def clean_text(value, limit):
+    text = "".join(char for char in str(value) if not unicodedata.category(char).startswith("C"))
+    text = " ".join(text.split())
+    if len(text) > limit:
+        return text[:limit - 1] + "…"
+    return text
+
+
+def snapshot_value(snapshot, *keys):
+    for key in keys:
+        value = snapshot.get(key)
+        if value not in (None, ""):
+            return value
+    return ""
+
+
+def colorize(text, percentage, settings):
+    colors_enabled = (
+        settings["colors"]
+        and os.environ.get("NO_COLOR") is None
+        and os.environ.get("KIMI_QUOTA_NOCOLOR") != "1"
+    )
+    if not colors_enabled:
+        return text
+    if percentage < settings["critical_below"]:
+        color = ANSI_RED
+    elif percentage < settings["warning_below"]:
+        color = ANSI_ORANGE
+    else:
+        color = ANSI_GREEN
+    return color + text + ANSI_RESET
+
+
+def quota_part(name, window, settings, stale):
+    if not isinstance(window, dict):
+        return None
+    try:
+        remaining = finite_number(window.get("remaining_ratio"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if remaining < 0:
+        return None
+    percentage = 100 * min(1.0, remaining)
+    text = name + " " + ("~" if stale else "") + str(round(percentage)) + "%"
+    if settings["show_reset"]:
+        hint = reset_hint(window.get("reset_at"))
+        if hint:
+            text += " " + hint
+    return colorize(text, percentage, settings)
+
+
+def render(cache, snapshot=None, settings=None):
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    settings = settings or load_settings()
     windows = cache.get("windows")
-    if not isinstance(windows, dict) or not windows:
-        return "Kimi quota: unavailable" if cache else "Kimi quota: loading"
+    if not isinstance(windows, dict):
+        windows = {}
     try:
         fetched_at = finite_number(cache.get("fetched_at", 0))
     except (TypeError, ValueError, OverflowError):
         fetched_at = 0
     stale = time.time() - fetched_at > STALE_AFTER_SECONDS
     parts = []
-    for name, label in (("5h", "5h"), ("7d", "7d"), ("month", "month")):
-        window = windows.get(name)
-        if not isinstance(window, dict):
-            continue
-        try:
-            remaining = finite_number(window.get("remaining_ratio"))
-        except (TypeError, ValueError, OverflowError):
-            continue
-        if remaining < 0:
-            continue
-        percentage = round(100 * min(1.0, remaining))
-        text = label + " " + ("~" if stale else "") + str(percentage) + "%"
-        hint = reset_hint(window.get("reset_at"))
-        if hint:
-            text += " " + hint
-        parts.append(text)
-    return " · ".join(parts) if parts else "Kimi quota: unavailable"
+    quota_missing = False
+    for item in settings["items"]:
+        if item in ("5h", "7d", "month"):
+            part = quota_part(item, windows.get(item), settings, stale)
+            if part:
+                parts.append(part)
+            elif not windows and not quota_missing:
+                parts.append("Kimi quota: unavailable" if cache else "Kimi quota: loading")
+                quota_missing = True
+        elif item == "mode":
+            mode = clean_text(snapshot_value(snapshot, "permissionMode", "permission_mode"), 16)
+            if mode:
+                parts.append(mode.upper())
+        elif item == "model":
+            model = snapshot_value(snapshot, "model", "model_alias", "modelAlias")
+            if isinstance(model, dict):
+                model = snapshot_value(model, "alias", "id", "name")
+            model = clean_text(model, 40)
+            if model:
+                parts.append(model.split("/")[-1])
+        elif item == "plan":
+            if snapshot.get("planMode") or snapshot.get("plan_mode"):
+                parts.append("plan")
+        elif item == "git":
+            branch = snapshot_value(snapshot, "gitBranch", "git_branch", "branch")
+            if isinstance(branch, dict):
+                branch = snapshot_value(branch, "branch", "name")
+            branch = clean_text(branch, 24)
+            if branch:
+                parts.append("⎇ " + branch)
+        elif item == "cwd":
+            cwd = clean_text(snapshot_value(snapshot, "cwd", "work_dir", "workDir"), 100)
+            directory = re.split(r"[/\\]", cwd.rstrip("/\\"))[-1] if cwd else ""
+            if directory:
+                parts.append(clean_text(directory, 20))
+    return " · ".join(parts) if parts else "kimi-code"
 
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if hasattr(sys.stdin, "buffer"):
-        sys.stdin.buffer.read(MAX_RESPONSE_BYTES)
+        raw = sys.stdin.buffer.read(MAX_RESPONSE_BYTES).decode("utf-8", "replace")
     else:
-        sys.stdin.read(MAX_RESPONSE_BYTES)
+        raw = sys.stdin.read(MAX_RESPONSE_BYTES)
+    try:
+        snapshot = json.loads(raw) if raw.strip() else {}
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+    except ValueError:
+        snapshot = {}
     cache = load_cache()
     maybe_refresh(cache)
-    print(render(cache))
+    print(render(cache, snapshot))
 
 
 if __name__ == "__main__":

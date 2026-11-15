@@ -1,13 +1,13 @@
 {
   "name": "kimi-quota-statusline-secure",
-  "version": "1.0.0",
-  "description": "A minimal, privacy-focused Kimi Code status line showing remaining 5-hour, 7-day, and monthly quotas.",
+  "version": "1.1.0",
+  "description": "A configurable, privacy-focused Kimi Code status line with session details and color-coded remaining quotas.",
   "keywords": ["kimi-code", "statusline", "quota", "privacy", "security"],
   "license": "MIT",
   "interface": {
     "displayName": "Kimi Quota Statusline Secure",
-    "shortDescription": "Remaining Kimi quotas with no hooks, session-log access, or local HTTP server.",
-    "longDescription": "Displays remaining 5h, 7d, and monthly Kimi Code quotas. Uses only the official Kimi usages API over allowlisted HTTPS endpoints. No third-party dependencies, OAuth token persistence, prompt hooks, session-log reads, debug snapshots, or HTTP server."
+    "shortDescription": "Configurable session details and remaining quotas with no hooks, session-log access, or local HTTP server.",
+    "longDescription": "Displays permission mode, model, Plan mode, Git branch, working directory, and color-coded remaining 5h, 7d, and monthly quotas. Supports configurable items, thresholds, colors, and reset countdowns. Uses only the official Kimi usages API over allowlisted HTTPS endpoints. No third-party dependencies, OAuth token persistence, prompt hooks, session-log reads, debug snapshots, or HTTP server."
   },
   "commands": "./commands/"
 }
