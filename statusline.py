@@ -198,7 +198,7 @@ def fetch_official_quota():
             headers={
                 "Authorization": "Bearer " + token,
                 "Accept": "application/json",
-                "User-Agent": "kimi-quota-statusline-secure/1.1.0",
+                "User-Agent": "kimi-quota-statusline-secure/1.2.0",
             },
         )
         opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))

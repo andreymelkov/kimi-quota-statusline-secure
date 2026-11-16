@@ -15,8 +15,8 @@ Quota blocks are green by default, orange below 20% remaining, and red below 10%
 - No plugin hooks, MCP servers, system-prompt additions, local HTTP server, or session-log access.
 - No third-party Python dependencies.
 - OAuth access tokens are read only from the existing Kimi Code credential file and are never written to the cache or logs.
-- Requests are limited to `https://api.kimi.com/coding/v1/usages` and `https://api.kimi.ai/coding/v1/usages`.
-- HTTP redirects, non-HTTPS URLs, non-default ports, URL credentials, and environment-configured proxies are blocked.
+- Status-line requests are limited to `https://api.kimi.com/coding/v1/usages` and `https://api.kimi.ai/coding/v1/usages`. The separately invoked updater contacts only the project's public GitHub API and release archive endpoints, without GitHub credentials.
+- HTTP redirects, non-HTTPS URLs, non-default ports, URL credentials, and environment-configured proxies are blocked for both status-line requests and updates.
 - API responses are size-limited and validated before use.
 - On POSIX systems, the cache is created with mode `0600`. It contains only quota percentages, reset timestamps, and refresh timestamps—never OAuth tokens, prompts, project paths, or status-line input.
 - Model, permission mode, Plan mode, Git branch, and working directory come only from the status-line `stdin` snapshot. Snapshot text is stripped of control characters before rendering and is never persisted.
@@ -33,14 +33,14 @@ Direct connections are intentional. Users on networks that require an HTTP proxy
 - Python 3.9 or newer
 - An existing OAuth login to Kimi Code
 
-## Install or update
+## Install
 
 ```text
 /plugins install https://github.com/andreymelkov/kimi-quota-statusline-secure
 /reload
 ```
 
-For a new installation, configure the status line:
+Configure the status line:
 
 ```text
 /kimi-quota-statusline-secure:install
@@ -63,6 +63,23 @@ For a local checkout:
 ```
 
 The custom command replaces the built-in first footer line with the configurable display. Other `tui.toml` settings are preserved.
+
+## Update
+
+```text
+/kimi-quota-statusline-secure:update
+```
+
+Approve the updater's Bash command if Kimi Code asks for confirmation. The updater runs only when explicitly invoked and does not require `gh`, Git, or a GitHub token. It fetches the latest stable release, refuses downgrades and prereleases, validates the archive and plugin security policy, and backs up both the current managed copy and `installed.json` before replacing them.
+
+After an update:
+
+```text
+/reload
+/reload-tui
+```
+
+If the command is declined or cancelled, no files are changed. Automatic updates are intentionally not supported.
 
 ## Configuration
 
